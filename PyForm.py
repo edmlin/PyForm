@@ -14,10 +14,15 @@ def render_text_rect(screen, text, font, rect, color, background=None):
     render_text_pos(screen, text, font, (rect.left + padding_left, rect.top + padding_top),
                     color, background)
 
+def rect_transparent(screen,color,rect):
+    s = pg.Surface((rect.width,rect.height), pygame.SRCALPHA)
+    s.fill(color)
+    screen.blit(s, (rect.left,rect.top))
 
 class Control:
-    def __init__(self, form=None, left=0, top=0, width=0, height=0):
-        self.form = form
+    def __init__(self, form=None,parent=None, left=0, top=0, width=0, height=0):
+        self.form=form
+        self.parent=parent if parent is not None else form
         self.left = left
         self.top = top
         self.width = width
@@ -27,11 +32,25 @@ class Control:
         self.font_name = None
         self.font_size = None
         self.set_font('Courier', 18)
+        self.controls=[]
+
+    def focuse(self):
+        self.focused=True
+
+    def add_control(self, control):
+        self.controls.append(control)
+        control.form = self.form
+        control.parent=self
 
     def rect(self):
-        if self.form is not None:
-            return pg.Rect(self.left + self.form.left, self.top + self.form.top + self.form.title_height, self.width,
+        if self.parent:
+            if self.parent==self.form:
+                return pg.Rect(self.left + self.parent.rect().left, self.top + self.parent.rect().top + self.form.title_height, self.width,
                            self.height)
+            else:
+                return pg.Rect(self.left + self.parent.rect().left, self.top + self.parent.rect().top, self.width,
+                           self.height)
+
         else:
             return pg.Rect(self.left, self.top, self.width, self.height)
 
@@ -70,18 +89,79 @@ class Control:
                 self.mouse_out(event)
 
     def key_down(self, event):
-        pass
+        if not self.focused:
+            return
 
     def key_up(self, event):
-        pass
+        if not self.focused:
+            return
+        self.key_press(event)
 
     def key_press(self, event):
-        pass
+        if not self.focused:
+            return
 
+    def handle_event(self, event):
+        if event.type == pg.MOUSEMOTION:
+            self.mouse_move(event)
+        elif event.type == pg.MOUSEBUTTONDOWN:
+            self.mouse_down(event)
+        elif event.type == pg.MOUSEBUTTONUP:
+            self.mouse_up(event)
+        elif event.type == pg.KEYDOWN:
+            self.key_down(event)
+        elif event.type == pg.KEYUP:
+            self.key_up(event)
+        for control in self.controls:
+            if event.type in [pg.MOUSEMOTION,pg.MOUSEBUTTONDOWN]:
+                if control.focused or control.mouse_over or control.rect().collidepoint(event.pos):
+                    control.handle_event(event)
+            elif event.type in [pg.KEYDOWN,pg.KEYUP,pg.MOUSEBUTTONUP] and control.focused:
+                control.handle_event(event)
+
+class Draggable(Control):
+    def __init__(self,**args):
+        super().__init__(**args)
+        self.dragging=False
+        self.last_pos=None
+        self.covered_surf=None
+
+    def mouse_down(self, event):
+        super().mouse_down(event)
+        if self.rect().collidepoint(event.pos):
+            self.dragging=True
+            self.last_pos=event.pos
+
+    def mouse_move(self,event):
+        super().mouse_move(event)
+        if self.dragging and self.parent.rect().collidepoint(event.pos):
+            offset_x,offset_y=event.pos[0]-self.last_pos[0],event.pos[1]-self.last_pos[1]
+            if self.parent.rect().left <= self.rect().left + offset_x and \
+                    self.rect().left + self.rect().width + offset_x <= self.parent.rect().left + self.parent.rect().width and \
+                    self.parent.rect().top <= self.rect().top + offset_y and \
+                    self.rect().top + self.rect().height + offset_y <= self.parent.rect().top + self.parent.rect().height:
+                self.last_pos = event.pos
+                self.dragged(offset_x, offset_y)
+
+    def mouse_up(self,event):
+        super().mouse_up(event)
+        self.dragging=False
+
+    def render(self):
+        if not self.covered_surf:
+            self.covered_surf=self.form.screen.subsurface(self.rect()).copy()
+        pg.draw.rect(self.form.screen,pg.Color('gray'),self.rect())
+
+    def dragged(self,offset_x,offset_y):
+        self.form.screen.blit(self.covered_surf,(self.rect().left,self.rect().top))
+        self.left+=offset_x
+        self.top+=offset_y
+        self.covered_surf=self.form.screen.subsurface(self.rect()).copy()
+        self.render()
 
 class Label(Control):
     def __init__(self, form=None, left=0, top=0, width=0, height=0, text=""):
-        super().__init__(form, left, top, width, height)
+        super().__init__(form=form, left=left, top=top, width=width, height=height)
         self.text = text.replace("\r\n", "\n")
         self.color = pg.Color('black')
         self.background = pg.Color('white')
@@ -97,7 +177,7 @@ class Label(Control):
 
 class Button(Label):
     def __init__(self, form=None, left=0, top=0, width=0, height=0, text=""):
-        super().__init__(form, left, top, width, height, text)
+        super().__init__(form=form, left=left, top=top, width=width, height=height, text=text)
         self.background = pg.Color('gray')
 
     def render(self, down=False):
@@ -122,21 +202,84 @@ class Button(Label):
     def mouse_click(self, event):
         print("button clicked")
 
+class ScrollBarHandle(Draggable):
+    def __init__(self,form=None,parent=None,left=0,top=0,width=10,height=10,orientation=0,max=100):
+        super().__init__(form=form,parent=parent,left=left,top=top,width=width,height=height)
+        self.orientation=orientation
+        self.max=max
+
+    def dragged1(self,offset_x,offset_y):
+        self.form.screen.blit(self.covered_surf,(self.rect().left,self.rect().top))
+        if self.orientation==0 and 0<self.left+offset_x<self.max:
+            self.left+=offset_x
+        elif 0<self.top+offset_y<self.max:
+            self.top+=offset_y
+        self.covered_surf=self.form.screen.subsurface(self.rect()).copy()
+        self.render()
+
+class ScrollBar(Control):
+    def __init__(self,form=None,parent=None,left=0,top=0,width=10,length=100,orientation=0,min=0,max=100,current=0,view_port=10):
+        self.bar_width=width
+        self.min=min
+        self.max=max
+        self.current=current
+        self.view_port=view_port
+        self.length=length
+
+        if orientation==0: # 0: Horizontal 1: Vertical
+            width=length
+            height=self.bar_width
+            handle_height=self.bar_width
+            handle_width=self.handle_size()
+        else:
+            width=self.bar_width
+            height=length
+            handle_width = self.bar_width
+            handle_height = self.handle_size()
+        super().__init__(form=form,parent=parent,left=left,top=top,width=width,height=height)
+        self.handle=ScrollBarHandle(form=form,parent=self,left=0,top=0,width=handle_width,height=handle_height,orientation=orientation,max=self.length-self.handle_size())
+        self.add_control(self.handle)
+
+    def handle_size(self):
+        return 10
+        if self.view_port>=self.max-self.min:
+            return 0
+        return int(self.view_port/(self.max-self.min)*self.length)
+
+    def render(self):
+        rect_transparent(self.form.screen,(200,200,200,100),self.rect())
+        self.handle.render()
 
 class TextBox(Label):
     def __init__(self, form=None, left=0, top=0, width=0, height=0, text="", multilines=False):
-        super().__init__(form, left, top, width, height, text)
+        super().__init__(form=form, left=left, top=top, width=width, height=height, text=text)
         self.padding_left = 2
+        self.padding_right=2
         self.padding_top = 1
+        self.padding_bottom=2
         self.caret_row = 0
         self.caret_col = 0
         self.first_visible_col = 0
         self.first_visible_row = 0
         self.multilines = multilines
         self.current_line = 0
+        self.scrollbar_width=10
+        if self.multilines:
+            self.hscrollbar=ScrollBar(form=form,parent=self,left=0,top=self.height-self.scrollbar_width,width=self.scrollbar_width,length=self.width-self.scrollbar_width,orientation=0)
+            self.vscrollbar=ScrollBar(form=form,parent=self,left=self.width-self.scrollbar_width,top=0,width=self.scrollbar_width,length=self.height-self.scrollbar_width,orientation=1)
+            self.add_control(self.hscrollbar)
+            self.add_control(self.vscrollbar)
+        #else:
+        self.hscrollbar=self.vscrollbar=None
+
+    def text_rect(self):
+        return pg.Rect(self.rect().left+self.padding_left,self.rect().top+self.padding_top,self.rect().width-self.padding_left-self.padding_right,self.rect().height-self.padding_top-self.padding_bottom)
 
     def get_lines(self):
         return self.text.split("\n")
+
+    def visible_rows(self):
+        return (self.height-self.padding_top-self.padding_bottom)//self.font.get_linesize()
 
     def caret_x(self):
         text = self.text[self.first_visible_col:self.caret_col]
@@ -157,25 +300,40 @@ class TextBox(Label):
         rect = self.form.screen.get_clip()
         self.form.screen.set_clip(self.rect())
         pg.draw.line(self.form.screen, pg.Color('black'), (self.rect().left + self.caret_x(),
-                                                           self.rect().top + self.padding_top + self.font.get_linesize() * self.caret_row),
+                       self.rect().top + self.padding_top + self.font.get_linesize() * (self.caret_row-self.first_visible_row)),
                      (self.rect().left + self.caret_x(),
-                      self.rect().top + self.padding_top + self.font.get_linesize() * (self.caret_row + 1)))
+                      self.rect().top + self.padding_top + self.font.get_linesize() * (self.caret_row -self.first_visible_row+ 1)))
         self.form.screen.set_clip(rect)
 
+    def draw_scrollbars(self):
+        '''
+        rect_transparent(self.form.screen,(200,200,200,100),
+                     pg.Rect(self.rect().left+self.width-self.scrollbar_width,self.rect().top,
+                             self.scrollbar_width,self.height))
+        rect_transparent(self.form.screen, (200,200,200,100),
+                     pg.Rect(self.rect().left, self.rect().top+self.height-self.scrollbar_width,
+                             self.width , self.scrollbar_width))
+        '''
+        if self.hscrollbar:
+            self.hscrollbar.render()
+        if self.vscrollbar:
+            self.vscrollbar.render()
     def render(self):
         if self.form is not None:
-            self.form.screen.set_clip(self.rect())
             pg.draw.rect(self.form.screen, self.background, self.rect())
+            self.form.screen.set_clip(self.text_rect())
             lines = self.get_lines()
-            for i in range(self.first_visible_row,len(lines)):
+            for i in range(self.first_visible_row,min(self.first_visible_row+self.visible_rows()+1,len(lines))):
                 pos = (
                 self.rect().left + self.padding_left, self.rect().top + self.padding_top + (i-self.first_visible_row) * self.font.get_linesize())
                 render_text_pos(screen=self.form.screen, font=self.font, text=lines[i][self.first_visible_col:],
                                 color=self.color, pos=pos)
-            pg.draw.rect(self.form.screen, pg.Color("black"), self.rect(), 1)
+            self.form.screen.set_clip(None)
             if self.focused:
                 self.draw_caret()
-            self.form.screen.set_clip(None)
+            if self.multilines and self.mouse_over:
+                self.draw_scrollbars()
+            pg.draw.rect(self.form.screen, pg.Color("black"), self.rect(), 1)
 
     def move_caret(self, pos):
         caret_col = self.first_visible_col
@@ -185,30 +343,34 @@ class TextBox(Label):
             if left >= pos[0]:
                 break
             caret_col += 1
-        caret_row = (pos[1] - self.rect().top) // self.font.get_linesize()
+        caret_row = (pos[1] - self.rect().top - self.padding_top) // self.font.get_linesize() + self.first_visible_row
 
         self.set_caret(caret_row, caret_col)
 
+    def set_caret_pos(self,pos):
+        pos=min(max(pos,0),len(self.text)-1)
+        row,col,idx=0,0,0
+        text=""
+        while True:
+            if len(text + self.get_lines()[row])<pos:
+                text+=self.get_lines()[row]
+                row+=1
+                continue
+            else:
+                col=pos-len(text)
+                break
+        self.set_caret(row,col)
+
     def set_caret(self, caret_row, caret_col):
-        if caret_row < 0:
-            self.caret_row = 0
-        elif caret_row > len(self.get_lines()) - 1:
-            self.caret_row = len(self.get_lines()) - 1
-        else:
-            self.caret_row = caret_row
-        if caret_col < 0:
-            self.caret_col = 0
-        elif caret_col > len(self.get_lines()[self.caret_row]):
-            self.caret_col = len(self.get_lines()[self.caret_row])
-        else:
-            self.caret_col = caret_col
-        while self.caret_x() > self.width - 2 and self.first_visible_col < len(self.text) - 1:
+        self.caret_row=min(max(caret_row,0),len(self.get_lines())-1)
+        self.caret_col=min(max(caret_col,0),len(self.get_lines()[self.caret_row]))
+        while self.caret_x() > self.width - self.padding_right:
             self.first_visible_col += 1
         while self.first_visible_col > 0 and self.caret_col - 1 < self.first_visible_col:
             self.first_visible_col -= 1
         while self.first_visible_row > self.caret_row:
             self.first_visible_row -= 1
-        while self.first_visible_row + self.height // self.font.get_linesize() < self.caret_row:
+        while self.first_visible_row + self.visible_rows() -1 < self.caret_row:
             self.first_visible_row += 1
         self.render()
 
@@ -219,6 +381,14 @@ class TextBox(Label):
         else:
             self.render()
 
+    def mouse_in(self,event):
+        super().mouse_in(event)
+        self.render()
+
+    def mouse_out(self,event):
+        super().mouse_out(event)
+        self.render()
+
     def on_key_down(self, event):
         return True
 
@@ -227,7 +397,8 @@ class TextBox(Label):
             return
         if event.key == pg.K_BACKSPACE and self.get_caret_pos() > 0:
             self.text = self.text[0:self.get_caret_pos() - 1] + self.text[self.get_caret_pos():]
-            self.set_caret(self.caret_row, self.caret_col - 1)
+            #self.set_caret(self.caret_row, self.caret_col - 1)
+            self.set_caret_pos(self.get_caret_pos()-1)
         elif event.key == pg.K_DELETE and self.get_caret_pos() < len(self.text):
             self.text = self.text[0:self.get_caret_pos()] + self.text[self.get_caret_pos() + 1:]
         elif event.key == pg.K_LEFT and self.caret_col > 0:
@@ -307,12 +478,8 @@ class PyForm(Control):
     title_color = pg.Color('lightgray')
 
     def __init__(self, screen, left=0, top=0, width=0, height=0, title=""):
+        super().__init__(form=None,left=left,top=top,width=width,height=height)
         self.screen = screen
-        self.left = left
-        self.top = top
-        self.width = width
-        self.height = height
-        self.controls = []
         self.covered_screen = None
         self.visible = False
         self.dragging = False
@@ -392,9 +559,6 @@ class PyForm(Control):
             self.draw_x(pg.Color('white'), pg.Color('red'))
         else:
             self.draw_x()
-        for control in self.controls:
-            if control.rect().collidepoint(event.pos) or control.mouse_over:
-                control.mouse_move(event)
 
     def mouse_up(self, event):
         if self.handle_rect().collidepoint(event.pos) and self.dragging:
@@ -404,41 +568,15 @@ class PyForm(Control):
         if self.x_rect().collidepoint(x, y):
             self.close()
             return
-        for control in self.controls:
-            if control.rect().collidepoint(x, y) or control.focused:
-                control.mouse_up(event)
 
     def mouse_down(self, event):
         if self.handle_rect().collidepoint(event.pos):
             self.dragging = True
             self.dragging_pos = event.pos
             return
-        (x, y) = event.pos
-        for control in self.controls:
-            if control.rect().collidepoint(x, y) or control.focused:
-                control.mouse_down(event)
-
-    def key_down(self, event):
-        for control in self.controls:
-            if control.focused:
-                control.key_down(event)
-
-    def key_up(self, event):
-        for control in self.controls:
-            if control.focused:
-                control.key_up(event)
 
     def handle_event(self, event):
-        if event.type == pg.MOUSEMOTION:
-            self.mouse_move(event)
-        elif event.type == pg.MOUSEBUTTONDOWN:
-            self.mouse_down(event)
-        elif event.type == pg.MOUSEBUTTONUP:
-            self.mouse_up(event)
-        elif event.type == pg.KEYDOWN:
-            self.key_down(event)
-        elif event.type == pg.KEYUP:
-            self.key_up(event)
+        super().handle_event(event)
         pg.display.flip()
 
 
@@ -448,14 +586,16 @@ if __name__ == "__main__":
     screen = pg.display.set_mode((400, 400))
     pg.key.set_repeat(500, 100)
     form1 = PyForm(screen, 10, 10, 300, 200, title="Form1")
-    form1.add_control(Button(width=100, height=20, left=20, top=10, text="ABCgyl"))
-    form1.add_control(Label(width=100, height=20, top=50, left=20, text="ABCgyl"))
-    form1.add_control(TextBox(width=100, height=60, top=100, left=20, text="ABCgyl\r\n1234", multilines=False))
-    form1.add_control(CheckBox(top=150, left=20))
-    form1.add_control(RadioButton(top=150, left=50))
-    form1.add_control(RadioButton(top=150, left=100))
+    form1.add_control(Button(form=form1,width=100, height=20, left=20, top=10, text="ABCgyl"))
+    form1.add_control(Label(form=form1,width=100, height=20, top=50, left=20, text="ABCgyl"))
+    form1.add_control(TextBox(form=form1,width=100, height=53, top=80, left=20, text="ABCgyl\r\n1234\r\nasdfas\r\nasdfsadf", multilines=True))
+    form1.add_control(CheckBox(form=form1,top=150, left=20))
+    form1.add_control(RadioButton(form=form1,top=150, left=50))
+    form1.add_control(RadioButton(form=form1,top=150, left=100))
+    form1.add_control(Draggable(form=form1,top=150,left=200,width=20,height=20))
 
     form1.open()
+
     running = True
     while running:
         for e in pg.event.get():
