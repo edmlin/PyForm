@@ -647,6 +647,15 @@ class PyForm(Control):
         self.render()
         self.visible = True
 
+    def open_modal(self):
+        self.open()
+        while self.visible:
+            if pg.event.peek(pg.QUIT):
+                self.close()
+                break;
+            for event in pg.event.get():
+                self.handle_event(event)
+
     def drag_to(self, pos):
         (x0, y0) = self.dragging_pos
         (x, y) = pos
@@ -684,13 +693,85 @@ class PyForm(Control):
         super().handle_event(event)
         pg.display.flip()
 
+class MenuItem(Control):
+    def __init__(self,text=""):
+        super().__init__()
+        self.active=False
+        self.text=text
+        self.menu=None
+        self.padding_left=5
+        self.padding_right=5
+        self.on_mouse_click=None
+
+    def mouse_click(self, event):
+        if self.rect().collidepoint(event.pos):
+            for item in self.parent.controls:
+                item.active=False
+            self.active=True
+            if callable(self.on_mouse_click):
+                self.on_mouse_click(event)
+
+    def render(self):
+        if self.menu:
+            font=self.menu.font
+            self.left=0
+            for i in range(self.menu.controls.index(self)):
+                item=self.menu.controls[i]
+                self.left+=font.size(item.text)[0]+item.padding_left+item.padding_right
+            self.width=font.size(self.text)[0]+self.padding_left+self.padding_right
+            self.height=font.get_linesize()
+            if self.active and self.parent.mouse_over:
+                color = pg.Color('white')
+                background = pg.Color('blue')
+            elif self.mouse_over or self.active:
+                color = pg.Color('black')
+                background = pg.Color('lightgray')
+            else:
+                color=pg.Color('black')
+                background=pg.Color('white')
+            pg.draw.rect(self.menu.screen,background,self.rect())
+            render_text_rect(screen=self.menu.screen,text=self.text,font=self.parent.font,rect=self.rect(),color=color,background=background)
+
+class Menu(Control):
+    def __init__(self,form=None,screen=None):
+        super().__init__()
+        if form is not None:
+            self.parent=form
+            self.screen=form.screen
+            self.width=form.width
+        elif screen is not None:
+            self.parent=None
+            self.screen=screen
+            self.width=screen.get_width()
+
+    def add_item(self,text):
+        item=MenuItem(text)
+        item.menu=self
+        self.add_control(item)
+
+    def render(self):
+        self.height=self.font.get_linesize()
+        pg.draw.rect(self.screen,pg.Color('white'),self.rect())
+        for item in self.controls:
+            item.render()
+
+    def mouse_click(self, event):
+        for item in self.controls:
+            item.active=False
+        super().mouse_click(event)
+
+    def handle_event(self, event):
+        super().handle_event(event)
+        self.render()
+        pg.display.flip()
+
 
 if __name__ == "__main__":
     pg.init()
     pg.font.init()
     screen = pg.display.set_mode((400, 400))
     pg.key.set_repeat(500, 100)
-    form1 = PyForm(screen, 10, 10, 300, 200, title="Form1")
+    form1 = PyForm(screen, 10, 30, 300, 200, title="Form1")
     form1.add_control(Button(form=form1, width=100, height=20, left=20, top=10, text="ABCgyl"))
     form1.add_control(Label(form=form1, width=100, height=20, top=50, left=20, text="ABCgyl"))
     form1.add_control(
@@ -701,7 +782,14 @@ if __name__ == "__main__":
     form1.add_control(RadioButton(form=form1, top=150, left=100))
     form1.add_control(Draggable(form=form1, top=150, left=200, width=20, height=20))
 
-    form1.open()
+    menu=Menu(screen=screen)
+    menu.add_item("item1")
+    menu.add_item("item2")
+    menu.add_item("item3")
+
+    menu.render()
+
+    form1.open_modal()
 
     running = True
     while running:
@@ -710,3 +798,4 @@ if __name__ == "__main__":
                 running = False
             elif form1.visible:
                 form1.handle_event(e)
+            menu.handle_event(e)
